@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshCore Bot · Web Viewer</title>
+<style>
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; --line: light-dark(#d9dee6, #394250); --surface: light-dark(#fff, #1a212b); --muted: light-dark(#505e70, #b4c0d0); --accent: light-dark(#135da0, #a6d4ff); }
+* { box-sizing: border-box; }
+body { margin: 0; background: light-dark(#f1f4f8, #111720); color: light-dark(#172335, #ebf1f7); }
+header { background: #162334; color: #fff; }
+.bar, main { max-width: 72rem; margin: auto; padding: 1rem 1.5rem; }
+.bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+h1 { font-size: 1.15rem; margin: 0; }
+h2 { font-size: 1.35rem; margin: 0 0 .75rem; }
+main { padding-top: 2rem; }
+#radio { font-size: .9rem; text-align: right; }
+button { font: inherit; cursor: pointer; color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: .3rem; padding: .35rem .55rem; }
+button[aria-pressed="true"] { background: light-dark(#e5effb, #273d56); }
+button:disabled { cursor: wait; }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: .5rem; padding: 1.2rem; margin-bottom: 1.25rem; }
+.heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; text-align: left; white-space: nowrap; font-variant-numeric: tabular-nums; }
+th, td { padding: .65rem .6rem; border-bottom: 1px solid var(--line); }
+th, .hint, #updated, #error { font-size: .9rem; color: var(--muted); }
+#updated { margin: 0 0 .8rem; }
+#error { margin: 0 0 .8rem; }
+[hidden] { display: none; }
+@media (max-width: 42rem) { .bar, main { padding-inline: .8rem; } section { padding: .8rem; } }
+</style>
+</head>
+<body>
+<header><div class="bar"><h1>MeshCore Bot · Web Viewer</h1><span id="radio" role="status">Checking radio…</span></div></header>
+<main>
+<section aria-labelledby="repeater-heading">
+<h2 id="repeater-heading">Repeater stats</h2>
+<p id="repeater-summary" class="hint">Waiting for a radio contact snapshot. Send rp stats by admin DM to refresh.</p>
+<div class="scroll"><table>
+<thead><tr><th>Name</th><th>Prefix</th><th>Last advert</th><th>Location</th></tr></thead>
+<tbody id="repeater-rows"></tbody>
+</table></div>
+</section>
+<section aria-labelledby="runs-heading">
+  <div class="heading"><h2 id="runs-heading">Probe runs</h2><button id="refresh" type="button">Refresh</button></div>
+  <p id="updated"></p>
+  <p id="error" role="status" hidden></p>
+  <p id="empty" class="hint" hidden>Send a numbered probe over MeshCore, such as <code>probe hill-a 1/20</code>, to start a run.</p>
+  <div class="scroll" id="runs" hidden>
+    <table>
+      <thead><tr><th scope="col">Run</th><th scope="col">Route</th><th scope="col">Received</th><th scope="col">Duplicates</th><th scope="col">Median SNR</th><th scope="col">Median RSSI</th></tr></thead>
+      <tbody id="run-rows"></tbody>
+    </table>
+  </div>
+</section>
+<section id="detail" aria-labelledby="detail-heading" hidden>
+  <h2 id="detail-heading">Receptions</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th scope="col">Sequence</th><th scope="col">Received at</th><th scope="col">SNR</th><th scope="col">RSSI</th><th scope="col">Path</th></tr></thead>
+      <tbody id="sample-rows"></tbody>
+    </table>
+  </div>
+</section>
+</main>
+<script>
+'use strict';
+const ui = id => document.getElementById(id);
+const signal = (value, unit) => value === null ? '—' : `${value} ${unit}`;
+const status = { connecting: 'Radio connecting', connected: 'Radio connected', reconnecting: 'Radio reconnecting' };
+let selected = null;
+let refreshing = false;
+let detailRequest = 0;
+
+async function read(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+}
+
+function cell(row, value) {
+    row.insertCell().textContent = value;
+}
+
+async function showRun(id) {
+    const request = ++detailRequest;
+    try {
+        const run = await read(`/api/probes/${id}`);
+        if (request !== detailRequest) return;
+        ui('detail-heading').textContent = `Receptions · ${run.name}`;
+        const rows = ui('sample-rows');
+        rows.replaceChildren();
+        for (const sample of run.samples) {
+            const row = rows.insertRow();
+            cell(row, sample.sequence);
+            cell(row, new Date(sample.received_at).toLocaleString());
+            cell(row, signal(sample.snr, 'dB'));
+            cell(row, signal(sample.rssi, 'dBm'));
+            cell(row, sample.path);
+        }
+        ui('detail').hidden = false;
+    } catch {
+        if (request !== detailRequest) return;
+        ui('detail').hidden = true;
+        ui('error').textContent = 'This run could not be loaded. Refresh to see which runs are still available.';
+        ui('error').hidden = false;
+    }
+}
+
+function updateRuns(runs) {
+    const rows = ui('run-rows');
+    const focusedRun = document.activeElement?.dataset.run;
+    if (!runs.some(run => run.id === selected)) {
+        selected = null;
+        detailRequest += 1;
+        ui('detail').hidden = true;
+    }
+    rows.replaceChildren();
+    ui('runs').hidden = runs.length === 0;
+    ui('empty').hidden = runs.length !== 0;
+    for (const run of runs) {
+        const row = rows.insertRow();
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = run.name;
+        button.dataset.run = run.id;
+        button.setAttribute('aria-pressed', run.id === selected);
+        button.addEventListener('click', () => {
+            selected = run.id;
+            for (const control of rows.querySelectorAll('button')) {
+                control.setAttribute('aria-pressed', control === button);
+            }
+            showRun(run.id);
+        });
+        row.insertCell().append(button);
+        cell(row, run.route);
+        cell(row, `${run.received}/${run.total} (${Math.round(100 * run.received / run.total)}%)`);
+        cell(row, run.duplicates);
+        cell(row, signal(run.median_snr, 'dB'));
+        cell(row, signal(run.median_rssi, 'dBm'));
+        if (button.dataset.run === focusedRun) button.focus();
+    }
+}
+
+async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
+    ui('refresh').disabled = true;
+    try {
+        const [health, runs, repeaters] = await Promise.all([read('/api/health'), read('/api/probes'), read('/api/repeaters')]);
+        if (repeaters.updated_at) {
+            ui('repeater-summary').textContent = `${repeaters.total} repeaters · ${repeaters.active_24h} heard in 24h · ${repeaters.active_7d} in 7d · ${repeaters.stale} stale · ${repeaters.unknown_last_heard} unknown · ${repeaters.with_location} with location · ${repeaters.colliding_prefixes} colliding prefixes. Snapshot ${new Date(repeaters.updated_at).toLocaleString()}. Send rp stats to refresh.`;
+        }
+        ui('repeater-rows').replaceChildren();
+        for (const repeater of repeaters.repeaters) {
+            const row = ui('repeater-rows').insertRow();
+            cell(row, repeater.name || '(unnamed)');
+            cell(row, repeater.prefix.toString(16).padStart(2, '0').toUpperCase());
+            cell(row, repeater.advertised_at ? new Date(repeater.advertised_at * 1000).toLocaleString() : 'Unknown');
+            cell(row, repeater.location ? repeater.location.map(value => (value / 1000000).toFixed(4)).join(', ') : 'Unknown');
+        }
+        const label = status[health.radio] ?? 'Radio status unavailable';
+        if (ui('radio').textContent !== label) ui('radio').textContent = label;
+        ui('error').hidden = true;
+        updateRuns(runs);
+        ui('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        if (selected !== null) await showRun(selected);
+    } catch {
+        ui('radio').textContent = 'Viewer connection unavailable';
+        ui('error').textContent = 'Could not refresh the viewer. It will retry automatically.';
+        ui('error').hidden = false;
+    } finally {
+        refreshing = false;
+        ui('refresh').disabled = false;
+    }
+}
+
+ui('refresh').addEventListener('click', refresh);
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
