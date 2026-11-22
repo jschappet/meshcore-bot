@@ -33,6 +33,16 @@ th, .hint, #updated, #error { font-size: .9rem; color: var(--muted); }
 <body>
 <header><div class="bar"><h1>MeshCore Bot · Web Viewer</h1><span id="radio" role="status">Checking radio…</span></div></header>
 <main>
+<section aria-labelledby="channel-heading">
+<div class="heading"><h2 id="channel-heading">Channel messages</h2><button type="button" id="channel-pause" aria-pressed="false">Pause</button></div>
+<label for="channel-filter">Channel slot</label>
+<select id="channel-filter"><option value="">All channels</option></select>
+<p id="channel-empty" class="hint">Waiting for channel messages.</p>
+<div class="scroll"><table>
+<thead><tr><th>Received</th><th>Channel</th><th>Message</th><th>SNR</th><th>Route</th></tr></thead>
+<tbody id="channel-rows"></tbody>
+</table></div>
+</section>
 <section aria-labelledby="repeater-heading">
 <h2 id="repeater-heading">Repeater stats</h2>
 <p id="repeater-summary" class="hint">Waiting for a radio contact snapshot. Send rp stats by admin DM to refresh.</p>
@@ -71,6 +81,42 @@ const status = { connecting: 'Radio connecting', connected: 'Radio connected', r
 let selected = null;
 let refreshing = false;
 let detailRequest = 0;
+let channelsPaused = false;
+
+async function refreshChannels() {
+    if (channelsPaused) return;
+    const selected = ui('channel-filter').value;
+    const query = selected === '' ? '' : `?channel=${selected}`;
+    const data = await read('/api/channels' + query);
+    if (channelsPaused || ui('channel-filter').value !== selected) return;
+    const options = ui('channel-filter');
+    for (const channel of data.channels) {
+        if (![...options.options].some(option => option.value === String(channel))) {
+            options.add(new Option(`Channel #${channel}`, channel));
+        }
+    }
+    ui('channel-empty').hidden = data.messages.length !== 0;
+    ui('channel-rows').replaceChildren();
+    for (const message of data.messages) {
+        const row = ui('channel-rows').insertRow();
+        cell(row, new Date(message.received_at).toLocaleString());
+        cell(row, `#${message.channel}`);
+        const content = row.insertCell();
+        content.textContent = message.text;
+        content.style.whiteSpace = 'pre-wrap';
+        content.style.minWidth = '16rem';
+        content.style.overflowWrap = 'anywhere';
+        cell(row, signal(message.snr_db, 'dB'));
+        cell(row, message.route);
+    }
+}
+ui('channel-filter').addEventListener('change', () => refresh());
+ui('channel-pause').addEventListener('click', () => {
+    channelsPaused = !channelsPaused;
+    ui('channel-pause').textContent = channelsPaused ? 'Resume' : 'Pause';
+    ui('channel-pause').setAttribute('aria-pressed', channelsPaused);
+    if (!channelsPaused) refresh();
+});
 
 async function read(url) {
     const response = await fetch(url);
@@ -147,7 +193,7 @@ async function refresh() {
     refreshing = true;
     ui('refresh').disabled = true;
     try {
-        const [health, runs, repeaters] = await Promise.all([read('/api/health'), read('/api/probes'), read('/api/repeaters')]);
+        const [health, runs, repeaters] = await Promise.all([read('/api/health'), read('/api/probes'), read('/api/repeaters'), refreshChannels()]);
         if (repeaters.updated_at) {
             ui('repeater-summary').textContent = `${repeaters.total} repeaters · ${repeaters.active_24h} heard in 24h · ${repeaters.active_7d} in 7d · ${repeaters.stale} stale · ${repeaters.unknown_last_heard} unknown · ${repeaters.with_location} with location · ${repeaters.colliding_prefixes} colliding prefixes. Snapshot ${new Date(repeaters.updated_at).toLocaleString()}. Send rp stats to refresh.`;
         }

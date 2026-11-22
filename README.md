@@ -44,7 +44,7 @@ On Linux, the port is often `/dev/ttyACM0` or `/dev/ttyUSB0`.
 From the repository root, substitute your device path below:
 
 ```sh
-cargo run --locked --manifest-path rust/Cargo.toml -- --port /dev/cu.usbserial-0001
+cargo run --locked --manifest-path Cargo.toml -- --port /dev/cu.usbserial-0001
 ```
 
 Set `MESHCORE_PORT` to choose the default port, or pass `--port` explicitly.
@@ -91,7 +91,7 @@ Start the bot with `--web-port 8080`, then open
 For example:
 
 ```sh
-cargo run --locked --manifest-path rust/Cargo.toml -- \
+cargo run --locked --manifest-path Cargo.toml -- \
   --port /dev/cu.usbserial-0001 --config bot.json --web-port 8080
 ```
 
@@ -181,7 +181,7 @@ scope.
 Run with the config file and, if desired, enable channel replies separately:
 
 ```sh
-cargo run --locked --manifest-path rust/Cargo.toml -- \
+cargo run --locked --manifest-path Cargo.toml -- \
   --port /dev/cu.usbserial-0001 --config bot.json --channel 3
 ```
 
@@ -242,7 +242,7 @@ dispatch, admin authorization decisions, scheduled jobs, and whether the
 companion accepted outgoing messages:
 
 ```sh
-RUST_LOG=debug cargo run --locked --manifest-path rust/Cargo.toml -- \
+RUST_LOG=debug cargo run --locked --manifest-path Cargo.toml -- \
   --port /dev/cu.usbserial-0001 --config bot.json
 ```
 
@@ -257,7 +257,7 @@ Serial framing and the startup handshake are adapted from
 simulates a companion over a Unix socket and checks the transmitted reply frames.
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml
+cargo test --locked --manifest-path Cargo.toml
 ```
 
 ### Repeater statistics
@@ -280,3 +280,109 @@ have been observed and their activity. The viewer retains all discovered
 repeaters. Signed raw adverts are collected even when a repeater is absent
 from the radio's saved contacts. Tracking begins when the bot hears an advert
 or reads a matching contact. Merely configuring a key does not mark it heard.
+
+### Channel viewer
+
+The dashboard includes channel messages decoded by the companion radio,
+including Public and #test. Select a channel slot or view all channels, and
+pause or resume the display. It refreshes every five seconds and shows the
+received time, text, SNR when available, and route or hop count.
+
+The bot retains the latest 1,000 channel messages in memory across reconnects.
+The API returns up to 300 newest messages with
+`GET /api/channels?channel=0`; omit the query to view all slots. History resets
+on process restart. Messages drained from the radio's startup backlog appear
+with the time the bot retrieved them. DMs are excluded from this view.
+Anyone who can reach the viewer can read the displayed channel messages.
+
+## Raspberry Pi service
+
+### Build a release
+
+Use a current stable Rust toolchain on the Pi. From the repository root:
+
+```sh
+cargo build --release --locked --manifest-path Cargo.toml
+```
+
+The executable is `target/release/meshcore-bot`. To run it directly,
+stop any existing bot using the serial port, then use your usual arguments:
+
+```sh
+./target/release/meshcore-bot \
+  --port /dev/ttyACM0 --config bot.json \
+  --metrics-config metrics.local.json --web-host 0.0.0.0 --web-port 8080
+```
+
+### Install and enable the service
+
+On the Pi, run the installer as your regular user from the directory containing
+your bot settings and metrics outbox. Stop the bot running in your terminal
+first so the service can open the radio. Substitute the same port and options
+you already use:
+
+```sh
+./scripts/install-service.sh -- \
+  --port /dev/ttyACM0 --config bot.json \
+  --metrics-config metrics.local.json --web-host 0.0.0.0 --web-port 8080
+```
+
+The script builds the locked release binary, installs it in
+`/usr/local/bin/meshcore-bot-rust`, and creates, enables, and starts
+`meshcore-bot-rust.service`. It requests sudo for system installation.
+The service runs as your user, with the installer's starting directory as its
+working directory, so existing relative config paths and device credentials
+continue to work. It adds the user to dialout when that group exists.
+
+Use `--binary /path/to/meshcore-bot` before `--` to install a prebuilt Pi
+binary instead of building. Keep the working directory and settings files
+in place.
+
+### Update the release and restart
+
+After updating the source, build and install the new binary from the repository
+root. The service runs the installed copy in `/usr/local/bin`, so rebuilding
+alone does not update the running service.
+
+```sh
+cargo build --release --locked --manifest-path Cargo.toml
+./scripts/install-service.sh --binary target/release/meshcore-bot -- \
+  --port /dev/ttyACM0 --config bot.json \
+  --metrics-config metrics.local.json --web-host 0.0.0.0 --web-port 8080
+```
+
+Use your existing service arguments in the installer command. It regenerates
+the unit, reloads systemd, enables the service, and restarts it with the new
+binary.
+
+### Restart and check logs
+
+To restart the installed version after changing settings:
+
+```sh
+sudo systemctl restart meshcore-bot-rust
+systemctl --no-pager status meshcore-bot-rust
+journalctl -u meshcore-bot-rust -n 50 --no-pager
+```
+
+To follow logs continuously:
+
+```sh
+journalctl -u meshcore-bot-rust -f
+```
+
+To stop the service and disable startup at boot:
+
+```sh
+sudo systemctl disable --now meshcore-bot-rust
+```
+
+The service starts at boot and retries failed starts every ten seconds.
+To increase logging, use `sudo systemctl edit meshcore-bot-rust` and add:
+
+```ini
+[Service]
+Environment=RUST_LOG=debug
+```
+
+Then restart the service.

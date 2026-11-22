@@ -105,6 +105,7 @@ struct Radio<T> {
     port: T,
     frames: Frames,
     last_command: Option<Instant>,
+    channels: Option<std::sync::Arc<std::sync::Mutex<viewer::channels::Channels>>>,
     observations: Observations,
     channel_key: Option<(u8, [u8; 16])>,
     contacts: Option<(Instant, Vec<diagnostics::Repeater>)>,
@@ -120,6 +121,7 @@ impl<T: Read + Write> Radio<T> {
             port,
             frames: Frames::default(),
             last_command: None,
+            channels: None,
             observations: Observations::default(),
             channel_key: None,
             contacts: None,
@@ -322,6 +324,9 @@ impl<T: Read + Write> Radio<T> {
             }
             _ => {
                 if let Some(message) = protocol::message(&frame) {
+                    if let Some(channels) = &self.channels {
+                        channels.lock().unwrap().observe(&message);
+                    }
                     debug!(
                         "Incoming message on {} | text={:?}",
                         message.route, message.text
@@ -882,9 +887,17 @@ fn run_sessions<T: Read + Write>(
     let mut stats = Stats::default();
     let repeater_stats =
         std::sync::Arc::new(std::sync::Mutex::new(diagnostics::RepeaterStats::default()));
+    let channels = std::sync::Arc::default();
     let viewer = options
         .web_address
-        .map(|address| viewer::start(address, stats.probes.clone(), repeater_stats.clone()))
+        .map(|address| {
+            viewer::start(
+                address,
+                stats.probes.clone(),
+                repeater_stats.clone(),
+                std::sync::Arc::clone(&channels),
+            )
+        })
         .transpose()?;
     let config = options
         .metrics_config
@@ -903,6 +916,7 @@ fn run_sessions<T: Read + Write>(
         .map(|reporter| std::rc::Rc::new(std::cell::RefCell::new(reporter)));
     loop {
         radio.metrics = metrics.clone();
+        radio.channels = viewer.as_ref().map(|_| channels.clone());
         radio.repeater_stats = Some(repeater_stats.clone());
         if let Some(viewer) = &viewer {
             viewer.set_radio(viewer::RadioStatus::Connected);

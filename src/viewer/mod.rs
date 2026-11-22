@@ -1,3 +1,4 @@
+pub mod channels;
 use crate::probes::Probes;
 use actix_web::{middleware, web, App, HttpResponse, HttpServer, Scope};
 use serde::Serialize;
@@ -15,6 +16,7 @@ pub enum RadioStatus {
 }
 
 pub struct ViewerState {
+    pub channels: Arc<Mutex<channels::Channels>>,
     radio: Mutex<RadioStatus>,
     started: Instant,
     probes: Arc<Mutex<Probes>>,
@@ -37,6 +39,7 @@ pub fn start(
     address: SocketAddr,
     probes: Arc<Mutex<Probes>>,
     repeaters: Arc<Mutex<crate::diagnostics::RepeaterStats>>,
+    channels: Arc<Mutex<channels::Channels>>,
 ) -> io::Result<web::Data<ViewerState>> {
     let listener = TcpListener::bind(address).map_err(|error| {
         io::Error::new(
@@ -49,6 +52,7 @@ pub fn start(
         started: Instant::now(),
         probes,
         repeaters,
+        channels,
     });
     let server_state = state.clone();
     std::thread::Builder::new()
@@ -84,6 +88,7 @@ fn api_scope(path: &'static str) -> Scope {
     web::scope(path)
         .route("/health", web::get().to(health))
         .service(probe_scope())
+        .service(channels::scope())
         .service(web::scope("/repeaters").route("", web::get().to(repeater_stats)))
 }
 
@@ -133,6 +138,7 @@ mod tests {
     #[actix_web::test]
     async fn serves_health_and_current_probe_data_under_api_scope() {
         let state = web::Data::new(ViewerState {
+            channels: Arc::default(),
             radio: Mutex::new(RadioStatus::Connecting),
             started: Instant::now(),
             probes: Arc::new(Mutex::new(Probes::default())),
