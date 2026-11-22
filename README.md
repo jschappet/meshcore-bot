@@ -386,3 +386,16 @@ Environment=RUST_LOG=debug
 ```
 
 Then restart the service.
+
+### Repeater map
+
+Open `/repeaters/map` or choose **View repeater map** on the dashboard.
+The map shows repeaters with valid advertised coordinates, supports name and
+prefix search, and can filter to configured tracked repeaters. It refreshes
+every ten seconds and reports how many entries lack valid coordinates.
+The map uses Leaflet and OpenStreetMap tiles, loaded over the internet.
+
+The list combines radio contacts and signed adverts, including relayed adverts.
+A marker indicates an advertised location. It does not establish a direct
+link or confirm that the repeater receives your transmissions. Direct-neighbor
+metrics separately count signed zero-hop adverts heard by your radio.

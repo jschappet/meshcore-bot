@@ -81,7 +81,14 @@ pub fn start(
 
 fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/").route(web::get().to(dashboard)))
+        .service(web::resource("/repeaters/map").route(web::get().to(repeater_map)))
         .service(api_scope("/api"));
+}
+
+async fn repeater_map() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(include_str!("map.html"))
 }
 
 fn api_scope(path: &'static str) -> Scope {

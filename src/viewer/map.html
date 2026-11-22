@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repeater map · MeshCore Bot</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+body { margin:0; font-family:system-ui,sans-serif; background:#f1f4f8; color:#172335; }
+header { background:#162334; color:white; padding:1rem 1.5rem; display:flex; gap:1rem; align-items:center; flex-wrap:wrap; }
+header a { color:#bdddff; }
+h1 { font-size:1.2rem; margin:0; }
+main { padding:1rem; max-width:90rem; margin:auto; }
+.controls { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem; }
+button, input { font:inherit; padding:.4rem .65rem; }
+#map { height:70vh; min-height:350px; border:1px solid #bcc6d2; border-radius:.4rem; }
+#status { margin:0 0 .8rem; }
+.note { color:#505e70; }
+.leaflet-popup-content { white-space:pre-line; overflow-wrap:anywhere; }
+</style>
+</head>
+<body>
+<header><h1>Repeater map</h1><a href="/">Dashboard</a></header>
+<main>
+<p class="note">These repeaters come from saved radio contacts and signed adverts, including relayed adverts. Locations alone do not confirm a direct radio link.</p>
+<div class="controls">
+<label>Search <input id="search" type="search" placeholder="Name or prefix"></label>
+<label><input id="tracked" type="checkbox"> Tracked repeaters only</label>
+<button id="fit" type="button">Fit repeaters</button>
+<button id="refresh" type="button">Refresh</button>
+</div>
+<p id="status" role="status">Loading repeaters…</p>
+<div id="map" aria-label="Repeater locations"></div>
+<p class="note">Blue markers show configured tracked repeaters. Gray markers show other repeaters. Map tiles and the map library require internet access.</p>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+const ui = id => document.getElementById(id);
+let map, markers, data, fitted = false, busy = false;
+if (typeof L === 'undefined') {
+    ui('status').textContent = 'Map library could not load. Check internet access and reload this page.';
+} else {
+    map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom:19,
+        attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    markers = L.featureGroup().addTo(map);
+    let tileErrorShown = false;
+    map.eachLayer(layer => {
+        if (layer instanceof L.TileLayer) layer.on('tileerror', () => {
+            if (!tileErrorShown) {
+                tileErrorShown = true;
+                ui('status').textContent += ' Background tiles could not load.';
+            }
+        });
+    });
+}
+function fit() {
+    if (markers && markers.getLayers().length) map.fitBounds(markers.getBounds(), {padding:[30,30], maxZoom:13});
+}
+function render() {
+    if (!data || !map) return;
+    markers.clearLayers();
+    const query = ui('search').value.trim().toLowerCase();
+    const trackedKeys = new Set(data.tracked_repeaters.map(key => key.join(',')));
+    let missing = 0, shown = 0;
+    for (const repeater of data.repeaters) {
+        const tracked = trackedKeys.has(repeater.public_key.join(','));
+        const prefix = repeater.prefix.toString(16).padStart(2,'0').toUpperCase();
+        if (ui('tracked').checked && !tracked) continue;
+        if (query && !repeater.name.toLowerCase().includes(query) && !prefix.toLowerCase().includes(query)) continue;
+        const location = repeater.location;
+        if (!location || location.length !== 2 ||
+            !location.every(Number.isFinite) ||
+            Math.abs(location[0]) > 90000000 || Math.abs(location[1]) > 180000000 ||
+            (location[0] === 0 && location[1] === 0)) {
+            missing++;
+            continue;
+        }
+        const coordinates = location.map(value => value / 1000000);
+        const popup = document.createElement('div');
+        const last = repeater.advertised_at ? new Date(repeater.advertised_at*1000).toLocaleString() : 'Unknown';
+        popup.textContent = `${repeater.name || '(unnamed)'}
+Prefix ${prefix}
+${coordinates.map(value=>value.toFixed(5)).join(', ')}
+Advert time ${last}
+${tracked ? 'Tracked repeater' : 'Repeater'}`;
+        const marker = L.circleMarker(coordinates, {
+            radius:tracked?9:6, color:tracked?'#135da0':'#596575', fillOpacity:.75
+        }).bindPopup(popup).addTo(markers);
+        marker.bindTooltip(document.createTextNode(repeater.name || prefix));
+        shown++;
+    }
+    ui('status').textContent = `${shown} mapped · ${missing} without valid coordinates · ${data.total} total. ${data.updated_at ? 'Snapshot '+new Date(data.updated_at).toLocaleString() : 'Waiting for observations; send rp stats by admin DM to read contacts.'}`;
+    if (!fitted && shown) { fit(); fitted = true; }
+}
+async function refresh() {
+    if (busy || !map) return;
+    busy = true;
+    ui('refresh').disabled = true;
+    try {
+        const response = await fetch('/api/repeaters', {cache:'no-store'});
+        if (!response.ok) throw new Error('HTTP '+response.status);
+        data = await response.json();
+        render();
+    } catch {
+        ui('status').textContent = 'Could not refresh repeater data. Retrying automatically.';
+    } finally {
+        busy = false;
+        ui('refresh').disabled = false;
+    }
+}
+ui('fit').addEventListener('click',fit);
+ui('search').addEventListener('input',render);
+ui('tracked').addEventListener('change',render);
+ui('refresh').addEventListener('click',refresh);
+refresh();
+setInterval(refresh,10000);
+</script>
+</body>
+</html>
