@@ -1,4 +1,5 @@
 mod automation;
+mod contacts;
 mod diagnostics;
 mod metrics;
 mod probes;
@@ -32,6 +33,7 @@ struct Options {
     web_address: Option<SocketAddr>,
     metrics_config: Option<PathBuf>,
     metrics_retry_now: bool,
+    contacts_file: Option<PathBuf>,
 }
 
 fn options() -> Result<Option<Options>, String> {
@@ -43,6 +45,7 @@ fn options() -> Result<Option<Options>, String> {
     let mut web_host = None;
     let mut metrics_config = None;
     let mut metrics_retry_now = false;
+    let mut contacts_file = Some(PathBuf::from("contacts.json"));
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => return Ok(None),
@@ -56,6 +59,11 @@ fn options() -> Result<Option<Options>, String> {
                 metrics_config = Some(PathBuf::from(
                     args.next().ok_or("--metrics-config requires a file path")?,
                 ));
+            }
+            "--contacts-file" => {
+                contacts_file = Some(PathBuf::from(
+                    args.next().ok_or("--contacts-file requires a path")?,
+                ))
             }
             "--metrics-retry-now" => metrics_retry_now = true,
             "--web-host" => {
@@ -98,6 +106,7 @@ fn options() -> Result<Option<Options>, String> {
         }),
         metrics_config,
         metrics_retry_now,
+        contacts_file,
     }))
 }
 
@@ -105,6 +114,7 @@ struct Radio<T> {
     port: T,
     frames: Frames,
     last_command: Option<Instant>,
+    contact_store: Option<std::rc::Rc<std::cell::RefCell<contacts::Contacts>>>,
     viewer_contacts_at: Option<Instant>,
     channels: Option<std::sync::Arc<std::sync::Mutex<viewer::channels::Channels>>>,
     observations: Observations,
@@ -122,6 +132,7 @@ impl<T: Read + Write> Radio<T> {
             port,
             frames: Frames::default(),
             last_command: None,
+            contact_store: None,
             viewer_contacts_at: None,
             channels: None,
             observations: Observations::default(),
@@ -143,6 +154,11 @@ impl<T: Read + Write> Radio<T> {
             trace!("Radio RX opcode=0x{:02x} bytes={}", frame[0], frame.len());
             match frame[0] {
                 0x88 => {
+                    if let Some(store) = &self.contact_store {
+                        if let Some(repeater) = diagnostics::Repeater::from_raw(frame) {
+                            store.borrow_mut().observe(repeater)?;
+                        }
+                    }
                     if let Some(snapshot) = &self.repeater_stats {
                         if let Some(repeater) = diagnostics::Repeater::from_raw(frame) {
                             snapshot.lock().unwrap().observe(repeater);
@@ -691,6 +707,9 @@ impl<T: Read + Write> Radio<T> {
                     0x02 | 0x03 => valid = false,
                     0x04 => {
                         if valid && count == Some(contacts.len() as u32) {
+                            if let Some(store) = &self.contact_store {
+                                store.borrow_mut().sync(&contacts)?;
+                            }
                             if let Some(snapshot) = &self.repeater_stats {
                                 let repeaters: Vec<_> = contacts
                                     .iter()
@@ -910,7 +929,24 @@ fn run_sessions<T: Read + Write>(
     let mut stats = Stats::default();
     let repeater_stats =
         std::sync::Arc::new(std::sync::Mutex::new(diagnostics::RepeaterStats::default()));
-    let channels = std::sync::Arc::default();
+    let contact_store = options
+        .contacts_file
+        .as_deref()
+        .map(contacts::Contacts::open)
+        .transpose()?
+        .map(|store| std::rc::Rc::new(std::cell::RefCell::new(store)));
+    if let Some(store) = &contact_store {
+        *repeater_stats.lock().unwrap() =
+            diagnostics::RepeaterStats::from_contacts(store.borrow().repeaters());
+    }
+    let channels =
+        std::sync::Arc::new(std::sync::Mutex::new(viewer::channels::Channels::default()));
+    if let Some(store) = &contact_store {
+        channels
+            .lock()
+            .unwrap()
+            .set_contacts(store.borrow().radio_contacts());
+    }
     let viewer = options
         .web_address
         .map(|address| {
@@ -941,6 +977,17 @@ fn run_sessions<T: Read + Write>(
         radio.metrics = metrics.clone();
         radio.channels = viewer.as_ref().map(|_| channels.clone());
         radio.repeater_stats = Some(repeater_stats.clone());
+        radio.contact_store = contact_store.clone();
+        if contact_store.is_some() {
+            match radio.read_contacts() {
+                Ok(Some(contacts)) => {
+                    channels.lock().unwrap().set_contacts(&contacts);
+                    info!("Saved {} radio contacts", contacts.len());
+                }
+                Ok(None) => warn!("Radio contact sync incomplete; saved contacts retained"),
+                Err(error) => return Err(error),
+            }
+        }
         if let Some(viewer) = &viewer {
             viewer.set_radio(viewer::RadioStatus::Connected);
         }
@@ -1106,6 +1153,7 @@ mod tests {
                 web_address: None,
                 metrics_config: None,
                 metrics_retry_now: false,
+                contacts_file: None,
             },
             |_| {
                 let mut radio = Radio::new(opens.next().expect("unexpected open")?);

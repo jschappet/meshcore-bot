@@ -405,3 +405,17 @@ keys are offered as contact-name matches in expandable rows. Channel messages
 carry no sender public key, so these matches are explicitly unverified and may
 include multiple contacts. Contact names and keys refresh on incoming channel
 traffic at most once per minute.
+
+### Saved contacts
+
+The bot saves the radio contact snapshot and discovered signed repeater
+adverts to `contacts.json` in its working directory. It reads the radio's
+contacts on connection and updates the snapshot during later contact queries.
+Saved repeater entries are restored into the stats and map after a restart.
+Signed adverts create or update local repeater entries by full public key.
+
+Use `--contacts-file /path/to/contacts.json` to select a different file.
+The parent directory must exist and be writable by the service user. Writes
+use a temporary file and rename, and an exclusive lock prevents two bot
+processes using the same database. A damaged database is reported on startup.
+These local records do not add entries to the radio's own contact table.

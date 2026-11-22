@@ -327,12 +327,12 @@ impl Stats {
     }
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct Repeater {
-    public_key: [u8; 32],
+    pub(crate) public_key: [u8; 32],
     prefix: u8,
     name: String,
-    advertised_at: u32,
+    pub(crate) advertised_at: u32,
     location: Option<(i32, i32)>,
 }
 

@@ -1,1 +1,6 @@
 /target/
+
+# Local contact database
+/contacts.json
+/contacts.lock
+/contacts.tmp
