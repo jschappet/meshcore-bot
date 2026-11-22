@@ -105,6 +105,7 @@ struct Radio<T> {
     port: T,
     frames: Frames,
     last_command: Option<Instant>,
+    viewer_contacts_at: Option<Instant>,
     channels: Option<std::sync::Arc<std::sync::Mutex<viewer::channels::Channels>>>,
     observations: Observations,
     channel_key: Option<(u8, [u8; 16])>,
@@ -121,6 +122,7 @@ impl<T: Read + Write> Radio<T> {
             port,
             frames: Frames::default(),
             last_command: None,
+            viewer_contacts_at: None,
             channels: None,
             observations: Observations::default(),
             channel_key: None,
@@ -324,7 +326,28 @@ impl<T: Read + Write> Radio<T> {
             }
             _ => {
                 if let Some(message) = protocol::message(&frame) {
-                    if let Some(channels) = &self.channels {
+                    if let (Some(channels), Route::Channel(index)) =
+                        (self.channels.clone(), message.route)
+                    {
+                        let known = channels.lock().unwrap().has_channel(index);
+                        if !known {
+                            match self.channel_details(index) {
+                                Ok(Some((name, _))) => {
+                                    channels.lock().unwrap().set_channel(index, name)
+                                }
+                                Ok(None) => {}
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        if self
+                            .viewer_contacts_at
+                            .is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
+                        {
+                            self.viewer_contacts_at = Some(Instant::now());
+                            if let Some(contacts) = self.read_contacts()? {
+                                channels.lock().unwrap().set_contacts(&contacts);
+                            }
+                        }
                         channels.lock().unwrap().observe(&message);
                     }
                     debug!(

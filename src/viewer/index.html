@@ -35,11 +35,11 @@ th, .hint, #updated, #error { font-size: .9rem; color: var(--muted); }
 <main>
 <section aria-labelledby="channel-heading">
 <div class="heading"><h2 id="channel-heading">Channel messages</h2><button type="button" id="channel-pause" aria-pressed="false">Pause</button></div>
-<label for="channel-filter">Channel slot</label>
+<label for="channel-filter">Channel</label>
 <select id="channel-filter"><option value="">All channels</option></select>
 <p id="channel-empty" class="hint">Waiting for channel messages.</p>
 <div class="scroll"><table>
-<thead><tr><th>Received</th><th>Channel</th><th>Message</th><th>SNR</th><th>Route</th></tr></thead>
+<thead><tr><th>Received</th><th>Channel</th><th>Message</th><th>Sender keys</th><th>SNR</th><th>Route</th></tr></thead>
 <tbody id="channel-rows"></tbody>
 </table></div>
 </section>
@@ -93,20 +93,38 @@ async function refreshChannels() {
     const options = ui('channel-filter');
     for (const channel of data.channels) {
         if (![...options.options].some(option => option.value === String(channel))) {
-            options.add(new Option(`Channel #${channel}`, channel));
+            options.add(new Option(data.channel_names[channel] || `Slot ${channel}`, channel));
         }
+        const option = [...options.options].find(option => option.value === String(channel));
+        option.textContent = data.channel_names[channel] || `Slot ${channel}`;
     }
     ui('channel-empty').hidden = data.messages.length !== 0;
     ui('channel-rows').replaceChildren();
     for (const message of data.messages) {
         const row = ui('channel-rows').insertRow();
         cell(row, new Date(message.received_at).toLocaleString());
-        cell(row, `#${message.channel}`);
+        cell(row, message.channel_name || `Slot ${message.channel}`);
         const content = row.insertCell();
         content.textContent = message.text;
         content.style.whiteSpace = 'pre-wrap';
         content.style.minWidth = '16rem';
         content.style.overflowWrap = 'anywhere';
+        const keys = row.insertCell();
+        if (message.sender_key_candidates.length) {
+            const details = document.createElement('details');
+            const summary = document.createElement('summary');
+            summary.textContent = `${message.sender_key_candidates.length} contact name match(es), unverified`;
+            details.append(summary);
+            for (const key of message.sender_key_candidates) {
+                const value = document.createElement('code');
+                value.textContent = key;
+                value.style.display = 'block';
+                details.append(value);
+            }
+            keys.append(details);
+        } else {
+            keys.textContent = 'Unavailable';
+        }
         cell(row, signal(message.snr_db, 'dB'));
         cell(row, message.route);
     }

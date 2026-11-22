@@ -399,3 +399,9 @@ The list combines radio contacts and signed adverts, including relayed adverts.
 A marker indicates an advertised location. It does not establish a direct
 link or confirm that the repeater receives your transmissions. Direct-neighbor
 metrics separately count signed zero-hop adverts heard by your radio.
+
+Channel labels are read from the radio when a channel message arrives. Sender
+keys are offered as contact-name matches in expandable rows. Channel messages
+carry no sender public key, so these matches are explicitly unverified and may
+include multiple contacts. Contact names and keys refresh on incoming channel
+traffic at most once per minute.
