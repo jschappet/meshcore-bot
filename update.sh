@@ -1,3 +1,5 @@
+git pull origin main 
+ 
 cargo build --release --locked
 
 sudo install -m 0755 target/release/meshcore-bot \
