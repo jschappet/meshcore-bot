@@ -33,6 +33,15 @@ th, .hint, #updated, #error { font-size: .9rem; color: var(--muted); }
 <body>
 <header><div class="bar"><h1>MeshCore Bot · Web Viewer</h1><span id="radio" role="status">Checking radio…</span></div></header>
 <main>
+<section aria-labelledby="verification-heading">
+<h2 id="verification-heading">Skagit verification</h2>
+<p id="verification-status" role="status">Loading requests…</p>
+<p class="hint">Sender identifiers are six-byte key prefixes. Radio acceptance confirms a send was queued. Website round-trip completion is recorded by RegenerateSkagit.</p>
+<div class="scroll"><table>
+<thead><tr><th>Received</th><th>Sender</th><th>Registration</th><th>Status</th><th>Backend attempts</th><th>Next retry</th></tr></thead>
+<tbody id="verification-rows"></tbody>
+</table></div>
+</section>
 <section aria-labelledby="channel-heading">
 <div class="heading"><h2 id="channel-heading">Channel messages</h2><button type="button" id="channel-pause" aria-pressed="false">Pause</button></div>
 <label for="channel-filter">Channel</label>
@@ -83,6 +92,22 @@ let selected = null;
 let refreshing = false;
 let detailRequest = 0;
 let channelsPaused = false;
+
+async function refreshVerifications() {
+    const data = await read('/api/verifications');
+    ui('verification-status').textContent = !data.enabled ? 'Verification is not configured.' :
+        data.requests.length ? `${data.requests.length} latest verification requests` : 'No verification requests received yet.';
+    ui('verification-rows').replaceChildren();
+    for (const request of data.requests) {
+        const row = ui('verification-rows').insertRow();
+        cell(row, request.received_at ? new Date(request.received_at).toLocaleString() : 'Unknown');
+        cell(row, request.sender_prefix || 'Unknown');
+        cell(row, request.registration_id || 'Unknown');
+        cell(row, request.status);
+        cell(row, request.attempts);
+        cell(row, request.retry_at ? new Date(request.retry_at * 1000).toLocaleString() : '—');
+    }
+}
 
 async function refreshChannels() {
     if (channelsPaused) return;
@@ -212,7 +237,7 @@ async function refresh() {
     refreshing = true;
     ui('refresh').disabled = true;
     try {
-        const [health, runs, repeaters] = await Promise.all([read('/api/health'), read('/api/probes'), read('/api/repeaters'), refreshChannels()]);
+        const [health, runs, repeaters] = await Promise.all([read('/api/health'), read('/api/probes'), read('/api/repeaters'), refreshChannels(), refreshVerifications()]);
         if (repeaters.updated_at) {
             ui('repeater-summary').textContent = `${repeaters.total} repeaters · ${repeaters.active_24h} heard in 24h · ${repeaters.active_7d} in 7d · ${repeaters.stale} stale · ${repeaters.unknown_last_heard} unknown · ${repeaters.with_location} with location · ${repeaters.colliding_prefixes} colliding prefixes. Snapshot ${new Date(repeaters.updated_at).toLocaleString()}. Send rp stats to refresh.`;
         }

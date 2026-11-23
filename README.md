@@ -419,3 +419,96 @@ The parent directory must exist and be writable by the service user. Writes
 use a temporary file and rename, and an exclusive lock prevents two bot
 processes using the same database. A damaged database is reported on startup.
 These local records do not add entries to the radio's own contact table.
+
+### Skagit registration verification
+
+Add this field to bot.json:
+
+```json
+"skagit_verification": {
+  "url": "https://regenerateskagit.org/api/meshcore/{id}",
+  "message_template": "Skagit confirmation: {passphrase}",
+  "outbox": "skagit-verification-outbox"
+}
+```
+
+Restart after changing these settings. The user sends
+`skagit verify REGISTRATION_ID CODE` as a DM to the bot. The bot saves the reception
+before a background worker posts to
+`https://regenerateskagit.org/api/meshcore/REGISTRATION_ID`.
+
+The JSON body includes `registration_id`, `code`, `event_id`, receive time,
+sender timestamp, six-byte `sender_key_prefix`, `transport: "dm"`, and SNR.
+RSSI and path may be null when the DM has no matching RF data. The prefix
+is not a full public key. The event ID is also the HTTP
+`Idempotency-Key`. The backend must accept repeated submissions with that ID
+and return the same passphrase. Its successful JSON response must contain
+`{"passphrase":"river-cedar"}`. Authentication for this endpoint currently
+uses the registration code.
+
+Failures retry with increasing delays up to five minutes. Pending requests
+and returned passphrases survive bot restarts. Once the radio accepts the
+DM reply, the job is marked sent. A crash between transmission and saving
+can cause a duplicate reply. Radio acceptance alone does not prove the user
+received it; entering the returned passphrase on the website completes that
+check. Verification DMs continue while channel replies are paused.
+
+The outbox stores registration codes and keeps completed jobs for
+deduplication. Keep the directory private and retain it across upgrades.
+The backend endpoint and registration-page integration must implement this
+request and response contract before end-to-end verification is available.
+
+The URL replaces `{id}` with the registration ID. The message template replaces
+`{passphrase}` with the backend's response and optionally supports `{id}`.
+Keep the expanded reply within 133 UTF-8 bytes. Each queued request retains
+the endpoint and template active when it was received, including across restarts.
+
+Existing queued channel verification jobs are retained but no longer uploaded
+or sent. Ask those users to submit their verification command again by DM.
+
+The Web Viewer includes a Skagit verification table with sender key prefix,
+registration ID, received time, queue status, backend attempt count, and next
+retry. It refreshes every five seconds and displays the latest 500 requests,
+including saved requests from before a restart. The read-only endpoint is
+`GET /api/verifications`. Codes and returned passphrases are excluded.
+“DM accepted by radio” describes the local radio's acknowledgment; website
+confirmation remains recorded in the RegenerateSkagit backend.
+
+### RegenerateSkagit welcome invites (Heron issue #34)
+
+Configure the production experiment's document UUID before enabling welcomes:
+
+```json
+"skagit_welcome": {
+  "enabled": false,
+  "channel": 3,
+  "experiment_id": "YOUR-EXPERIMENT-DOCUMENT-UUID",
+  "outbox": "skagit-welcome-outbox",
+  "message_template": "Welcome to RegenerateSkagit! {invite_url}"
+}
+```
+
+Replace the placeholder with the experiment document UUID and set the slot to
+#skagit. Confirm the experiment's identity in the production RegenerateSkagit
+ledger. Set MESHCORE_INVITE_BOT_TOKEN in the service environment to the same
+credential configured in Heron. Enable welcomes and restart once the target
+experiment and backend are ready.
+
+The bot POSTs experiment_id and a stable event_id to
+https://regenerateskagit.org/api/meshcore/invites using bearer authentication.
+Heron must persist an invite before returning HTTP 200/201 with invite_url.
+The bot saves the response before sending its channel welcome. Invalid or
+unknown experiment responses stop that welcome for operator review. Network
+failures retry in the background with the same event ID. Completed records
+prevent greeting the same display name in that channel and experiment again.
+This identity is provisional because channel messages carry no public key.
+Changing the configured experiment creates a separate welcome identity.
+
+The invite URL must fit the template within 100 UTF-8 bytes. Keep the template
+short. Credentials and backend invite URLs are excluded from application logs.
+Settings take effect on restart. No location is submitted or published by this
+flow. Registration and email confirmation link the person to the experiment
+on Heron; the separate DM verification endpoint remains unchanged.
+
+The production registration/email/experiment linkage must still be verified
+against a real experiment. No production test is performed automatically.

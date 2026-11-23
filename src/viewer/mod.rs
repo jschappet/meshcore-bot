@@ -16,6 +16,7 @@ pub enum RadioStatus {
 }
 
 pub struct ViewerState {
+    verification: Option<crate::skagit::Verification>,
     pub channels: Arc<Mutex<channels::Channels>>,
     radio: Mutex<RadioStatus>,
     started: Instant,
@@ -40,6 +41,7 @@ pub fn start(
     probes: Arc<Mutex<Probes>>,
     repeaters: Arc<Mutex<crate::diagnostics::RepeaterStats>>,
     channels: Arc<Mutex<channels::Channels>>,
+    verification: Option<crate::skagit::Verification>,
 ) -> io::Result<web::Data<ViewerState>> {
     let listener = TcpListener::bind(address).map_err(|error| {
         io::Error::new(
@@ -53,6 +55,7 @@ pub fn start(
         probes,
         repeaters,
         channels,
+        verification,
     });
     let server_state = state.clone();
     std::thread::Builder::new()
@@ -96,7 +99,23 @@ fn api_scope(path: &'static str) -> Scope {
         .route("/health", web::get().to(health))
         .service(probe_scope())
         .service(channels::scope())
+        .service(web::scope("/verifications").route("", web::get().to(verifications)))
         .service(web::scope("/repeaters").route("", web::get().to(repeater_stats)))
+}
+
+async fn verifications(state: web::Data<ViewerState>) -> HttpResponse {
+    match &state.verification {
+        Some(queue) => match queue.statuses() {
+            Ok(rows) => {
+                HttpResponse::Ok().json(serde_json::json!({"enabled":true, "requests":rows}))
+            }
+            Err(error) => {
+                log::error!("Could not read verification status: {error}");
+                HttpResponse::InternalServerError().finish()
+            }
+        },
+        None => HttpResponse::Ok().json(serde_json::json!({"enabled":false, "requests":[]})),
+    }
 }
 
 fn probe_scope() -> Scope {
@@ -145,6 +164,7 @@ mod tests {
     #[actix_web::test]
     async fn serves_health_and_current_probe_data_under_api_scope() {
         let state = web::Data::new(ViewerState {
+            verification: None,
             channels: Arc::default(),
             radio: Mutex::new(RadioStatus::Connecting),
             started: Instant::now(),

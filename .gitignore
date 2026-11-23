@@ -4,3 +4,5 @@
 /contacts.json
 /contacts.lock
 /contacts.tmp
+/skagit-verification-outbox/
+/skagit-welcome-outbox/

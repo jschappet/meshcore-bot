@@ -17,6 +17,8 @@ struct Config {
     advert_interval_seconds: Option<u32>,
     scheduled_messages: Vec<Schedule>,
     heartbeat: Option<HeartbeatConfig>,
+    skagit_verification: Option<crate::skagit::Config>,
+    skagit_welcome: Option<crate::welcome::Config>,
 }
 
 #[derive(Deserialize)]
@@ -193,6 +195,8 @@ impl Heartbeat {
 
 #[derive(Default)]
 pub struct Automation {
+    pub skagit_welcome: Option<crate::welcome::Config>,
+    pub skagit_verification: Option<crate::skagit::Config>,
     config_file: Option<PathBuf>,
     keys: Vec<[u8; 32]>,
     pub tracked_repeaters: Vec<[u8; 32]>,
@@ -236,6 +240,12 @@ impl Automation {
             .take()
             .map(|value| value.resolve(&keys))
             .transpose()?;
+        if let Some(verification) = &config.skagit_verification {
+            verification.validate()?;
+        }
+        if let Some(welcome) = &config.skagit_welcome {
+            welcome.validate()?;
+        }
         let now = SystemTime::now();
         let mut jobs = Vec::new();
         for schedule in config.scheduled_messages {
@@ -253,6 +263,8 @@ impl Automation {
             self.next_advert = interval.map(|duration| now + duration);
         }
         self.advert_interval = interval;
+        self.skagit_welcome = config.skagit_welcome;
+        self.skagit_verification = config.skagit_verification;
         self.jobs = jobs;
         self.keys = keys;
         self.tracked_repeaters = tracked_repeaters;

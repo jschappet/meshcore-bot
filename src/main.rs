@@ -4,7 +4,9 @@ mod diagnostics;
 mod metrics;
 mod probes;
 mod protocol;
+mod skagit;
 mod viewer;
+mod welcome;
 
 use automation::{Action, Automation};
 use diagnostics::{Multitest, Observations, Reception, Stats, Trace};
@@ -115,6 +117,8 @@ struct Radio<T> {
     frames: Frames,
     last_command: Option<Instant>,
     contact_store: Option<std::rc::Rc<std::cell::RefCell<contacts::Contacts>>>,
+    welcome: Option<(welcome::Config, welcome::Welcome)>,
+    verification: Option<(skagit::Config, skagit::Verification)>,
     viewer_contacts_at: Option<Instant>,
     channels: Option<std::sync::Arc<std::sync::Mutex<viewer::channels::Channels>>>,
     observations: Observations,
@@ -133,6 +137,8 @@ impl<T: Read + Write> Radio<T> {
             frames: Frames::default(),
             last_command: None,
             contact_store: None,
+            welcome: None,
+            verification: None,
             viewer_contacts_at: None,
             channels: None,
             observations: Observations::default(),
@@ -298,6 +304,22 @@ impl<T: Read + Write> Radio<T> {
         automation: &mut Automation,
     ) -> io::Result<()> {
         self.finish_diagnostics()?;
+        if !automation.channels_paused {
+            if let Some((_, welcome)) = self.welcome.clone() {
+                if let Some((id, slot, text)) = welcome.reply()? {
+                    if self.reply(&Route::Channel(slot), &text)? {
+                        welcome.mark_sent(&id)?;
+                    }
+                }
+            }
+        }
+        if let Some((_, verification)) = self.verification.clone() {
+            if let Some((id, prefix, text)) = verification.reply()? {
+                if self.reply(&Route::Direct(prefix), &text)? {
+                    verification.mark_sent(&id)?;
+                }
+            }
+        }
         if let Some(snapshot) = &self.repeater_stats {
             snapshot.lock().unwrap().tracked_repeaters = automation.tracked_repeaters.clone();
         }
@@ -368,8 +390,27 @@ impl<T: Read + Write> Radio<T> {
                     }
                     debug!(
                         "Incoming message on {} | text={:?}",
-                        message.route, message.text
+                        message.route,
+                        if message.text.contains("regenerateskagit.org") {
+                            "[RegenerateSkagit link redacted]"
+                        } else {
+                            message.text
+                        }
                     );
+                    if let Some((config, welcome)) = &self.welcome {
+                        welcome.observe(config, &message)?;
+                    }
+                    if let Some((config, verification)) = self.verification.clone() {
+                        if matches!(message.route, Route::Direct(_)) {
+                            let reception = self.reception(&message);
+                            verification.enqueue(
+                                &config,
+                                &message,
+                                reception.map(|row| row.rssi_dbm),
+                                reception.map(Reception::label),
+                            )?;
+                        }
+                    }
                     let command = parse_command(&message, channel);
                     stats.record(&message, command.is_some());
                     if let Some((keyword, argument)) = command {
@@ -926,6 +967,17 @@ fn run_sessions<T: Read + Write>(
     mut retries: impl Iterator<Item = ()>,
 ) -> io::Result<()> {
     let mut automation = Automation::new(options.config_file.clone())?;
+    let welcome = automation
+        .skagit_welcome
+        .clone()
+        .filter(|config| config.enabled)
+        .map(|config| welcome::Welcome::start(&config).map(|service| (config, service)))
+        .transpose()?;
+    let verification = automation
+        .skagit_verification
+        .clone()
+        .map(|config| skagit::Verification::start(&config).map(|queue| (config, queue)))
+        .transpose()?;
     let mut stats = Stats::default();
     let repeater_stats =
         std::sync::Arc::new(std::sync::Mutex::new(diagnostics::RepeaterStats::default()));
@@ -955,6 +1007,7 @@ fn run_sessions<T: Read + Write>(
                 stats.probes.clone(),
                 repeater_stats.clone(),
                 std::sync::Arc::clone(&channels),
+                verification.as_ref().map(|(_, queue)| queue.clone()),
             )
         })
         .transpose()?;
@@ -974,6 +1027,8 @@ fn run_sessions<T: Read + Write>(
         .transpose()?
         .map(|reporter| std::rc::Rc::new(std::cell::RefCell::new(reporter)));
     loop {
+        radio.welcome = welcome.clone();
+        radio.verification = verification.clone();
         radio.metrics = metrics.clone();
         radio.channels = viewer.as_ref().map(|_| channels.clone());
         radio.repeater_stats = Some(repeater_stats.clone());

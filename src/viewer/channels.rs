@@ -152,6 +152,7 @@ mod tests {
         contact[100..104].copy_from_slice(b"Node");
         channels.set_contacts(&[contact]);
         let state = web::Data::new(super::super::ViewerState {
+            verification: None,
             channels: Arc::new(Mutex::new(channels)),
             radio: Mutex::new(super::super::RadioStatus::Connected),
             started: std::time::Instant::now(),
